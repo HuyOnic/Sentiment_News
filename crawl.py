@@ -5,8 +5,13 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import NoSuchElementException
 from chung_khoan_viet_group import crawl_group, save_posts_csv
+import pandas as pd
+import datetime
 
 CHROME_DRIVER = os.getenv("CHROME_DRIVER", "/usr/local/bin/chromedriver")
+CHROME_DRIVER = "C:/Users/ADMIN/Downloads/chromedriver-win64/chromedriver.exe"
+fb_sources = pd.read_csv("Sentiment_Source.csv")
+groups = fb_sources[fb_sources["Loại nguồn"]=="Facebook"].loc[:, "Link"].tolist()
 
 opts = Options()
 # Có thể headless ở giai đoạn dùng lại cookie
@@ -34,11 +39,17 @@ try:
     driver.get("https://www.facebook.com/")
 
     posts = []
-    #     # Lưu kết quả
-    posts = crawl_group(driver, 'https://www.facebook.com/groups/202428219869114', n_scrolls=3)
-    save_posts_csv(posts, path="db_posts_1.csv")
+    print("Tổng số groups:", len(groups))
+
+    for idx, group in enumerate(groups):
+        print("Group:", idx)
+        new_posts = crawl_group(driver, group, n_scrolls=8)
+        if new_posts:
+            posts += new_posts
     # Lưu kết quả
-    # posts = crawl_group(driver, 'https://www.facebook.com/groups/congdongchungkhoanchinhthuc', n_scrolls=3)
-    # save_posts_csv(posts, path="db_posts_2.csv")
+    now = datetime.datetime.now()
+    formatted = now.strftime("%Y%m%d")
+    save_posts_csv(posts, path=f"all_posts_{formatted}.csv")
+
 finally:
     driver.quit()

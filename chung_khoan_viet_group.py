@@ -13,6 +13,12 @@ import csv, os  # đảm bảo đã import ở đầu file
 import random, re
 from datetime import datetime, timedelta
 
+months = {
+    "Tháng 1": 1, "Tháng 2": 2, "Tháng 3": 3, "Tháng 4": 4,
+    "Tháng 5": 5, "Tháng 6": 6, "Tháng 7": 7, "Tháng 8": 8,
+    "Tháng 9": 9, "Tháng 10": 10, "Tháng 11": 11, "Tháng 12": 12
+}
+
 def get_text_safe(el) -> str:
     # Loại bỏ khoảng trắng
     try:
@@ -33,17 +39,16 @@ def extract_post(article) -> Dict[str, str]:
     # print("Inner HTML", txt)
     # --- Người đăng ---
     # Tìm link tiêu đề trong header h2 (thường hiển thị display name)
-    author = "Ẩn danh"
+    author = ""
     try:
         header_candidates = article.find_element(
                                                 By.CSS_SELECTOR,
-                                                "span.html-span.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x1hl2dhg.x16tdsg8.x1vvkbs"
+                                                "b.html-b.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x1hl2dhg.x16tdsg8.x1vvkbs.x1s688f"
                                                 )
         
         author = header_candidates.text.replace("\n","").strip()
-        if len(author) > 20 or len(author)==0:
-            author = "Ẩn danh"
-        # print("Author:", author)
+        if len(author) >= 30 or len(author)==0:
+            return None
     except Exception as e:
         pass
 
@@ -70,6 +75,10 @@ def extract_post(article) -> Dict[str, str]:
                 post_time = t.get_attribute("datetime") or t.get_attribute("title") or get_text_safe(t)
                 if post_time:
                     break
+        
+        if not post_time:
+            return None
+
         current_time = datetime.now()
         if "phút" in post_time:
             minutes = int(post_time.split(" ")[0])
@@ -90,6 +99,31 @@ def extract_post(article) -> Dict[str, str]:
             weeks = int(post_time.split(" ")[0])
             post_time = current_time - timedelta(weeks=weeks)
             post_time = post_time.strftime("%Y-%m-%d %H:%M:%S")
+
+        elif "năm" in post_time:
+            years = int(post_time.split(" ")[0])
+            post_time = current_time - timedelta(days=years*365)
+            post_time = post_time.strftime("%Y-%m-%d %H:%M:%S")
+
+        elif "https" in post_time:
+            post_time = "2025-10-01 00:00:00"
+
+        elif "Tháng" in post_time:
+        # Tách dữ liệu
+            parts = post_time.replace(",", "").split()
+            day = int(parts[0])
+            month = months[f"{parts[1]} {parts[2]}"]
+            try:
+                year = int(parts[3])
+            except:
+                year = 2025
+
+            # Tạo datetime
+            dt = datetime(year, month, day)
+
+            # Chuyển định dạng
+            post_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+    
     except Exception:
         pass
 
@@ -98,29 +132,41 @@ def extract_post(article) -> Dict[str, str]:
     content = ""
     try:
         # vùng message chính (nếu có)
-        msg_blocks = article.find_elements(By.XPATH, ".//*[@data-ad-preview='message']//*[self::div or self::span or self::p]")
-        if msg_blocks:
-            parts = [get_text_safe(x) for x in msg_blocks]
-            content = "\n".join([p for p in parts if p])
-
-        if not content:
+        msg_block = article.find_element(By.CSS_SELECTOR, "div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl")
+        if msg_block:
+            content = get_text_safe(msg_block)
+        
+        if not author:
             # fallback: lấy toàn bộ text của article rồi lọc bớt các control
             content = get_text_safe(article)
-        content = content.split("Tất cả cảm xúc:")[0]
-        partern = r'(?:[a-zA-Z0-9ờ]\s*){20,}'
-        content = re.sub(partern, '', content)
+            real_author, real_content = split_by_capital_group(content)
+            author = real_author
+            content = real_content
+
+        content = content.split("Thích Trả lời")[0].split("·")[-1].split("Tất cả cảm xúc")[0].strip()
+        content = re.sub(r"\s*\d+\s*(phút|giờ|ngày|tuần|tháng|năm)\s*$", "", content)
+        content_length = len(content.split(" "))
+        
+        if content_length<10: 
+            return None
+
+        if not author:
+            return None
     except Exception:
         pass
 
     # Làm gọn
     if content:
         content = "\n".join([line.strip() for line in content.splitlines() if line.strip()])
+        content = content.split("·")[-1]
 
-    return {
+    data = {
         "author": author or "",
         "time": post_time or "",
         "content": content or "",
-    }
+    }    
+    print(data)
+    return data
 
 def crawl_group(driver, group_url: str, n_scrolls: int = 50) -> List[Dict[str, str]]:
     wait = WebDriverWait(driver, 20)
@@ -130,26 +176,19 @@ def crawl_group(driver, group_url: str, n_scrolls: int = 50) -> List[Dict[str, s
 
     try:
         driver.get(group_url)
-        print("✅ Đã vào được group:", group_url)
-
+        print("Đã vào được group:", group_url)
+        time.sleep(2)
         # Chờ đến khi có bài đầu tiên
         wait.until(EC.presence_of_element_located((By.XPATH, "//div[@role='article']")))
-
-        last_height = driver.execute_script("return document.body.scrollHeight")
+        start_idx = 0
 
         for i in prog_bar:
-            # print(f"🔽 Scroll lần {i + 1}")
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(random.uniform(8, 10))
+            scroll_step = 1000*(i + 1)
+            print(f"🔽 Scroll lần {i + 1}")
 
-            new_height = driver.execute_script("return document.body.scrollHeight")
+            driver.execute_script(f"window.scrollTo(0, {scroll_step});")
+            time.sleep(random.uniform(1, 2))
 
-            if new_height <= last_height:
-                print("⛔ Không còn nội dung mới, dừng scroll.")
-                break
-            last_height = new_height
-
-            # Mở rộng các bài có nút "Xem thêm"
             try:
                 see_more_buttons = driver.find_elements(By.XPATH, "//div[text()='Xem thêm']")
                 for btn in see_more_buttons:
@@ -160,39 +199,66 @@ def crawl_group(driver, group_url: str, n_scrolls: int = 50) -> List[Dict[str, s
             except NoSuchElementException:
                 pass
 
+            # all_author_names = driver.find_elements(By.CSS_SELECTOR, "b.html-b.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x1hl2dhg.x16tdsg8.x1vvkbs.x1s688f") 
+            # all_times = driver.find_elements(By.CSS_SELECTOR, "span.html-span.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x1hl2dhg.x16tdsg8.x1vvkbs")
+            # print(len(all_author_names), "-", len(all_times))
+            # for author_name, news_date in zip(all_author_names, all_times):
+            #      print("Author:", author_name.text.replace("\n", ""), "- Time:", news_date.text)
+
+            
+
             # articles = driver.find_elements(By.XPATH, "//div[@role='article']")
             articles = driver.find_elements(By.CSS_SELECTOR,"div.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl")
-            # print(f"🔍 Tìm thấy {len(articles)} bài viết")
-
-            for art in articles:
+            print(f"🔍 Tìm thấy {len(articles[start_idx:])} bản ghi")
+            
+            for idx, art in enumerate(articles[start_idx:]):
                 # print(art.get_attribute("outerHTML"))
                 try:
                     data = extract_post(art)
+                    if not data:
+                        continue
                     content_id = f"{data['author']}|{data['time']}|{data['content'][:30]}"
                     if any([data["author"], data["time"], data["content"]]) and content_id not in seen_posts:
                         results.append(data)
                         seen_posts.add(content_id)
+                        start_idx = idx
                 except Exception as e:
                     print("⚠️ Lỗi khi xử lý bài viết:", e)
 
         print(f"✅ Tổng số bài viết thu thập được: {len(results)}")
         return results
+    except Exception as e:
+        print("Error:", e)
 
-    finally:
-        driver.quit()
+def split_by_capital_group(s: str):
+    words = s.split()
+    if not words:
+        return "", ""
 
+    # gom các từ viết hoa liên tiếp từ đầu
+    idx = 0
+    for w in words:
+        if w[0].isupper():
+            idx += 1
+        else:
+            break
+
+    # nếu tất cả đều viết hoa thì substring2 rỗng
+    substring1 = " ".join(words[:(idx-1)])
+    substring2 = " ".join(words[(idx-1):])
+
+    return substring1, substring2
 
 def save_posts_csv(posts, path="fb_posts.csv"):
     fieldnames = ["author", "time", "content"]
 
     df = pd.DataFrame(posts)
-    print(df.columns)
     # Post processing 
     df = df[df["time"].notna()]
     df = df.drop_duplicates(subset=["content"])
-    df = df[df["content"].str.len() > 15]
+    df = df[df["content"].str.len() > 20]
     df.to_csv(path, index=False, encoding="utf-8-sig")
-    print(f"Đã lưu {df.shape[0]} bản khi vào csv")
+    print(f"✅ Đã lưu {df.shape[0]} bản khi vào csv")
 
 if __name__ == "__main__":
     posts = crawl_group(n_scrolls=8, min_posts=30)

@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 CHROME_DRIVER = os.getenv("CHROME_DRIVER", "/usr/local/bin/chromedriver")
+CHROME_DRIVER = "C:/Users/ADMIN/Downloads/chromedriver-win64/chromedriver.exe"
 FB_EMAIL = os.getenv("FB_EMAIL") or input("Nhập email FB: ").strip()
 FB_PASS  = os.getenv("FB_PASS")  or input("Nhập password FB: ").strip()
 
