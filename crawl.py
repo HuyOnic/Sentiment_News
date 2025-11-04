@@ -1,55 +1,62 @@
-# load_fb_cookies_and_open_group.py
-import pickle, time, os
+from multiprocessing import Pool, cpu_count
+import pandas as pd
+import pickle, os
+import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import NoSuchElementException
 from chung_khoan_viet_group import crawl_group, save_posts_csv
-import pandas as pd
-import datetime
 
-CHROME_DRIVER = os.getenv("CHROME_DRIVER", "/usr/local/bin/chromedriver")
 CHROME_DRIVER = "C:/Users/ADMIN/Downloads/chromedriver-win64/chromedriver.exe"
 fb_sources = pd.read_csv("Sentiment_Source.csv")
-groups = fb_sources[fb_sources["Loại nguồn"]=="Facebook"].loc[:, "Link"].tolist()
+groups = fb_sources[fb_sources["Loại nguồn"]=="Facebook"]["Link"].tolist()
 
-opts = Options()
-# Có thể headless ở giai đoạn dùng lại cookie
-# opts.add_argument("--headless=new")
-opts.add_argument("--no-sandbox")
-opts.add_argument("--disable-dev-shm-usage")
+def worker(group_batch):
+    opts = Options()
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    # opts.add_argument("--headless=new")  # tùy chọn
 
-driver = webdriver.Chrome(service=Service(CHROME_DRIVER), options=opts)
-
-try:
-    # PHẢI ở đúng domain trước khi add_cookie
+    driver = webdriver.Chrome(service=Service(CHROME_DRIVER), options=opts)
     driver.get("https://www.facebook.com/")
 
+    # Load cookies
     cookies = pickle.load(open("fb_cookies.pkl", "rb"))
     for c in cookies:
-        # Chrom(e|ium) yêu cầu expiry kiểu int nếu có
         if "expiry" in c:
             c["expiry"] = int(c["expiry"])
         try:
             driver.add_cookie(c)
-        except Exception:
+        except:
             pass
 
-    # Áp cookie
     driver.get("https://www.facebook.com/")
 
-    posts = []
-    print("Tổng số groups:", len(groups))
+    all_posts = []
+    for g in group_batch:
+        print(f"[PID {os.getpid()}] Crawling: {g}")
+        try:
+            posts = crawl_group(driver, g, n_scrolls=20)
+            if posts:
+                all_posts.extend(posts)
+        except Exception as e:
+            print("Lỗi:", e)
 
-    for idx, group in enumerate(groups):
-        print("Group:", idx)
-        new_posts = crawl_group(driver, group, n_scrolls=8)
-        if new_posts:
-            posts += new_posts
-    # Lưu kết quả
-    now = datetime.datetime.now()
-    formatted = now.strftime("%Y%m%d")
-    save_posts_csv(posts, path=f"all_posts_{formatted}.csv")
-
-finally:
     driver.quit()
+    return all_posts
+
+if __name__ == '__main__':
+    n_proc = min(8, cpu_count())  # tối đa 4 tab Chrome song song là hợp lý
+    chunk = len(groups) // n_proc + 1
+    batches = [groups[i:i + chunk] for i in range(0, len(groups), chunk)]
+
+    with Pool(n_proc) as p:
+        result = p.map(worker, batches)
+
+    # Gộp kết quả
+    final_posts = [x for batch in result for x in batch]
+
+    formatted = datetime.datetime.now().strftime("%Y%m%d")
+    output_path = f"all_posts_{formatted}.csv"
+    save_posts_csv(final_posts, output_path)
+    print("✅ DONE:", len(final_posts), "to", output_path)
